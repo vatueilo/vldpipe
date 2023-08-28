@@ -331,6 +331,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "backoff"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
+dependencies = [
+ "futures-core",
+ "getrandom",
+ "instant",
+ "pin-project-lite",
+ "rand",
+ "tokio",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3539,18 +3553,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
-name = "veilid-cat"
-version = "0.1.0"
-dependencies = [
- "clap",
- "flume",
- "futures-util",
- "thiserror",
- "tokio",
- "veilid-core",
-]
-
-[[package]]
 name = "veilid-core"
 version = "0.1.10"
 source = "git+https://gitlab.com/veilid/veilid.git?tag=v0.1.10#513116e672b39f340ee3ae7e75e1af90913c0e7d"
@@ -3691,6 +3693,21 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "vldpipe"
+version = "0.1.0"
+dependencies = [
+ "backoff",
+ "capnp",
+ "capnpc",
+ "clap",
+ "flume",
+ "futures-util",
+ "thiserror",
+ "tokio",
+ "veilid-core",
+]
 
 [[package]]
 name = "waker-fn"

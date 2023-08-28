@@ -2,12 +2,18 @@
 name = "vldpipe"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 license = "MPL-2.0"
 
 [dependencies]
+backoff = { version = "0.4.0", features = ["tokio"] }
+capnp = { version = "0.17.2", default_features = false }
 clap = { version = "4.4.0", features = ["derive"] }
 flume = "0.11.0"
 futures-util = "0.3.28"
 thiserror = "1.0.47"
 tokio = { version = "1" }
 veilid-core = { git = "https://gitlab.com/veilid/veilid.git", tag = "v0.1.10", features = ["rt-tokio"] }
+
+[build-dependencies]
+capnpc = "0.17.2"
