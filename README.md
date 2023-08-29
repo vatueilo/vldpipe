@@ -27,17 +27,27 @@ Or serve it on all interfaces (local lan, public wan ingress) with:
 vldpipe [that DHT key] 0.0.0.0:9000
 ```
 
-Should pair nicely with podman-compose and the like.
+Should eventually pair nicely with podman-compose and the like.
+
+# Demo
+
+Serving up the project source on port 8000, exporting it to Veilid, importing from Veilid _back_ to the same machine on port 9000. Useless but fun.
+
+[![asciicast](https://asciinema.org/a/Dmh396J39LRuKqRYV7MQXKb9u.svg)](https://asciinema.org/a/Dmh396J39LRuKqRYV7MQXKb9u)
 
 # TODO
 
 Persistent node identities & DHT addresses.
 
-Attributions to veilid-core and https://gitlab.com/bbigras/netdog.
+Patched veilid-core to start nodes faster? Or upstream fix for this... configuration option? There's about a 1m5s delay for the node to go online.
 
-Message handler is totally wrong. Need to redo it, implement proper dispatching and stream tracking. Was lazily avoiding that but that was a mistake.
+Renegotiating private routes. I've observed persistent InvalidTarget failures, which seems to indicate that routes can churn and need to be rebuilt automatically.
 
 Authenticated encryption like Tor stealth HS.
 
-No idea how secure this is yet.
+No idea how secure this really is yet.
+
+# Credits
+
+Examples in veilid-core and https://gitlab.com/bbigras/netdog were super-helpful in figuring out how to set things up.
 
