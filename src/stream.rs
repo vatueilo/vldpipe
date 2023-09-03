@@ -26,7 +26,7 @@ pub struct AppCallStream {
 
     /// Receiver fed vldpipe payloads via veilid-core node's update-callback,
     /// routed by vldpipe to this stream by stream_id.
-    from_veilid: Receiver<Vec<u8>>,
+    payload_receiver: Receiver<Vec<u8>>,
 
     /// An outbound app_call write task in progress, if any.
     write_handle: Option<JoinHandle<io::Result<usize>>>,
@@ -40,13 +40,13 @@ impl AppCallStream {
         stream_id: u64,
         routing_context: RoutingContext,
         target: Target,
-        from_veilid: Receiver<Vec<u8>>,
+        payload_receiver: Receiver<Vec<u8>>,
     ) -> AppCallStream {
         AppCallStream {
             stream_id,
             routing_context,
             target,
-            from_veilid,
+            payload_receiver,
             write_handle: None,
             read_handle: None,
         }
@@ -181,7 +181,7 @@ impl AsyncRead for AppCallStream {
             }
             // No prior read in progress, start one
             None => {
-                let from_veilid = self_mut.from_veilid.clone();
+                let from_veilid = self_mut.payload_receiver.clone();
                 let read_handle = tokio::spawn(async move {
                     let result = match from_veilid.recv_async().await {
                         Ok(b) => Ok(b),
