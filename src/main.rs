@@ -20,14 +20,15 @@ use flume::{unbounded, Receiver, Sender};
 use tokio::net::{TcpListener, TcpSocket};
 use tokio::select;
 use veilid_core::{
-    CryptoKey, RoutingContext, SafetySelection, SafetySpec, Sequencing, VeilidAPIResult, Encodable, KeyPair, FourCC,
+    CryptoKey, RoutingContext, SafetySelection, SafetySpec, Sequencing,
+    VeilidAPIResult,
 };
 use veilid_core::{
     CryptoTyped, DHTSchema, DHTSchemaDFLT, Target, VeilidAPI, VeilidAPIError, VeilidUpdate,
     CRYPTO_KIND_VLD0,
 };
 
-use crate::stream::VeilidStream;
+use crate::stream::AppCallStream;
 
 #[derive(Debug)]
 pub enum PipeSpec {
@@ -113,7 +114,7 @@ async fn run() -> Result<()> {
         Receiver<veilid_core::VeilidUpdate>,
     ) = unbounded();
 
-            let key_pair = veilid_core::Crypto::generate_keypair(CRYPTO_KIND_VLD0)?;
+    let key_pair = veilid_core::Crypto::generate_keypair(CRYPTO_KIND_VLD0)?;
 
     // Create VeilidCore setup
     let update_callback = Arc::new(move |change: veilid_core::VeilidUpdate| {
@@ -125,7 +126,6 @@ async fn run() -> Result<()> {
     let api: veilid_core::VeilidAPI =
         veilid_core::api_startup(update_callback, config_callback).await?;
     api.attach().await?;
-
 
     eprintln!("waiting for network...");
 
@@ -243,7 +243,7 @@ async fn run_import(
                         //    Target::PrivateRoute(api.import_remote_private_route(conn_outbound_blob)?);
                         //eprintln!("got outbound connection target {:?}", conn_outbound_target);
                         eprintln!("import: starting forward for {}", fwd_id);
-                        let remote_stream = VeilidStream::new(fwd_id, routing_context, conn_outbound_target, fwd_receiver);
+                        let remote_stream = AppCallStream::new(fwd_id, routing_context, conn_outbound_target, fwd_receiver);
                         fwd_handles.insert(fwd_id, tokio::spawn(export_forward(local_stream, remote_stream)));
                         eprintln!("import: forward started for {}", fwd_id);
                     }
@@ -361,8 +361,6 @@ async fn run_export(
     // Print the DHT key, this is what clients can "connect()" to
     eprintln!("listening on {}", ln_inbound_dht.key());
 
-    let mut refresh_dht_interval = tokio::time::interval(Duration::from_secs(30));
-
     loop {
         select! {
             node_res = node_receiver.recv_async() => {
@@ -403,7 +401,7 @@ async fn run_export(
                                     unbounded();
                                 fwd_map.insert(call_id, fwd_sender);
 
-                                let remote_stream = VeilidStream::new(
+                                let remote_stream = AppCallStream::new(
                                     call_id, routing_context.clone(), conn_outbound_target, fwd_receiver);
                                 tokio::spawn(export_forward(
                                     socket.connect(from_local).await?,
@@ -512,7 +510,7 @@ async fn get_remote_route(api: VeilidAPI, from_remote: String) -> VeilidAPIResul
 
 async fn export_forward(
     mut local_stream: tokio::net::TcpStream,
-    remote_stream: VeilidStream,
+    remote_stream: AppCallStream,
 ) -> Result<()> {
     let stream_id = remote_stream.stream_id();
     eprintln!("{} forward start", stream_id);

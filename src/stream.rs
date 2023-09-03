@@ -11,26 +11,38 @@ use veilid_core::{RoutingContext, Target, VeilidAPIError};
 
 use crate::proto;
 
-pub struct VeilidStream {
+/// A network stream built over Veilid app_call primitives.
+pub struct AppCallStream {
+    /// Unique identifier for the stream. Somewhat analogous to a
+    /// dynamically-assigned port number.
     stream_id: u64,
 
+    /// veilid-core routing context, used to write to a remote vldpipe node with
+    /// app_call.
     routing_context: RoutingContext,
+    
+    /// Remote vldpipe node target "address".
     target: Target,
 
+    /// Receiver fed vldpipe payloads via veilid-core node's update-callback,
+    /// routed by vldpipe to this stream by stream_id.
     from_veilid: Receiver<Vec<u8>>,
 
+    /// An outbound app_call write task in progress, if any.
     write_handle: Option<JoinHandle<io::Result<usize>>>,
+
+    /// An inbound from_veilid read task in progress, if any.
     read_handle: Option<JoinHandle<io::Result<Vec<u8>>>>,
 }
 
-impl VeilidStream {
+impl AppCallStream {
     pub fn new(
         stream_id: u64,
         routing_context: RoutingContext,
         target: Target,
         from_veilid: Receiver<Vec<u8>>,
-    ) -> VeilidStream {
-        VeilidStream {
+    ) -> AppCallStream {
+        AppCallStream {
             stream_id,
             routing_context,
             target,
@@ -45,7 +57,7 @@ impl VeilidStream {
     }
 }
 
-impl AsyncWrite for VeilidStream {
+impl AsyncWrite for AppCallStream {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -56,7 +68,7 @@ impl AsyncWrite for VeilidStream {
         let prev_handle = self_mut.write_handle.take();
         let (next_handle, result) = match prev_handle {
             Some(mut h) => {
-                // There's a running app_call, check on it
+                // An existing app_call in progress, check on it
                 eprintln!("{} poll_write Some(app_call handle) running", stream_id);
                 if h.is_finished() {
                     eprintln!("{} poll_write handle has finished!", stream_id);
@@ -79,7 +91,7 @@ impl AsyncWrite for VeilidStream {
                 }
             }
             None => {
-                // Start an app_call
+                // No prior write in progress, start one app_call
                 eprintln!("{} None, start new app_call", stream_id);
                 let n = buf.len();
                 let (rc, target) = (self_mut.routing_context.clone(), self_mut.target.clone());
@@ -115,11 +127,9 @@ impl AsyncWrite for VeilidStream {
 
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
+        _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        eprintln!("{} flush", self.stream_id);
-        cx.waker().wake_by_ref();
-        Poll::Pending
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
@@ -132,18 +142,18 @@ impl AsyncWrite for VeilidStream {
             handle.abort();
         }
         cx.waker().wake_by_ref();
-        Poll::Pending
+        Poll::Ready(Ok(()))
     }
 }
 
-impl AsyncRead for VeilidStream {
+impl AsyncRead for AppCallStream {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let self_mut = self.get_mut();
-        let stream_id = self_mut.stream_id;
+        let stream_id = self_mut.stream_id();
         let prev_handle = self_mut.read_handle.take();
         let waker = cx.waker().clone();
 
