@@ -189,7 +189,7 @@ impl AppCallListener {
     }
 }
 
-fn new_connect_proto(call_id: u64, route: &[u8]) -> Vec<u8> {
+pub fn new_connect_proto(call_id: u64, route: &[u8]) -> Vec<u8> {
     let mut conn_builder = Builder::new_default();
     let mut conn = conn_builder.init_root::<proto::call::Builder>();
     conn.set_id(call_id);

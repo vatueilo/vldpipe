@@ -1,9 +1,9 @@
 mod config;
+mod dialer;
 mod listener;
 mod proto;
 mod stream;
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use std::{env, io, net, result};
 
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use capnp::message::{Builder, ReaderOptions};
+use capnp::message::Builder;
 use capnp::serialize;
 use clap::Parser;
 use thiserror::Error;
@@ -19,15 +19,16 @@ use thiserror::Error;
 use flume::{unbounded, Receiver, Sender};
 
 use tokio::net::{TcpListener, TcpSocket};
-use tokio::select;
+
 use veilid_core::{
-    CryptoKey, RoutingContext, SafetySelection, SafetySpec, Sequencing, VeilidAPIResult,
+    CryptoKey, RoutingContext, SafetySelection, SafetySpec, Sequencing, VeilidAPIResult, DHTRecordDescriptor,
 };
 use veilid_core::{
     CryptoTyped, DHTSchema, DHTSchemaDFLT, Target, VeilidAPI, VeilidAPIError, VeilidUpdate,
     CRYPTO_KIND_VLD0,
 };
 
+use crate::dialer::Dialer;
 use crate::listener::AppCallListener;
 use crate::stream::AppCallStream;
 
@@ -168,177 +169,34 @@ async fn run_import(
     from_remote: String,
     to_local: SocketAddr,
 ) -> Result<()> {
-    let mut fwd_senders = HashMap::new();
-    let mut fwd_handles = HashMap::new();
-
-    // get the private route blob from DHT, import it as listener_target
-    let remote_target = get_remote_route(api.clone(), from_remote.to_owned()).await?;
-
     let local_ln = TcpListener::bind(to_local).await?;
     eprintln!("import: started local listener on {}", to_local);
-    let (conn_inbound_addr, conn_inbound_blob) = new_private_route(&api).await?;
-    eprintln!(
-        "import: created new inbound connection route {:?}",
-        conn_inbound_addr
-    );
 
-    loop {
-        select! {
-            // Accept local TCP connection
-            accept_res = local_ln.accept() => {
-                match accept_res {
-                    Ok((local_stream, local_addr)) => {
-                        eprintln!("import: accepted connection from {}", local_addr);
-                        // Connect to remote target
-                        let routing_context = api
-                            .routing_context()
-                            .with_custom_privacy(privacy())?;
-                        eprintln!("import: calling remote for outbound target");
-                        let fwd_id: u64;
-                        let conn_outbound_target: Target;
-                        let connect_msg = new_connect_proto(0, &conn_inbound_blob);
+    let routing_context = api.routing_context().with_custom_privacy(privacy())?;
+    let dialer = Dialer::new(routing_context.clone(), node_receiver).await?;
 
-                        // Veilid "connect()"
-                        match app_call(&routing_context, remote_target.clone(), connect_msg).await {
-                            Ok(resp) => {
-                                let reader =
-                                    serialize::read_message(resp.as_slice(), ReaderOptions::new())
-                                        .unwrap();
-                                let call = reader.get_root::<proto::call::Reader>().unwrap();
+    let remote_dht = open_dht_record(&routing_context, from_remote.to_owned()).await?;
+    eprintln!("import: opened dht {:?}", remote_dht);
+    
+    let result: Result<()> = async {
+        loop {
+            let (local_stream, local_addr) = local_ln.accept().await?;
+            eprintln!("import: accepted connection from {}", local_addr);
 
-                                fwd_id = call.get_id();
-                                let conn_outbound_blob = match call.which() {
-                                    Ok(proto::call::Which::Connect(Ok(route))) => route.to_owned(),
-                                    Ok(_) => {
-                                        eprintln!("import: invalid route response: {:?}", call);
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("import: invalid route response: {:?}", e);
-                                        continue;
-                                    }
-                                };
-                                conn_outbound_target = if let Ok(target_key) = api.import_remote_private_route(conn_outbound_blob) {
-                                    Target::PrivateRoute(target_key)
-                                } else {
-                                    eprintln!("import: invalid target key");
-                                    continue;
-                                }
-                            }
-                            Err(VeilidAPIError::InvalidTarget) => {
-                                eprintln!("import: invalid target");
-                                continue;
-                            }
-                            Err(e) => {
-                                eprintln!("import: failed to connect: {:?}", e);
-                                continue;
-                            }
-                        }
-
-                        // Create a sender / receiver for the forward
-                        let (fwd_sender, fwd_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = unbounded();
-                        fwd_senders.insert(fwd_id, fwd_sender);
-
-                        // make rpc call to listener_target, get remote private route, import as conn_target
-                        //let conn_outbound_target =
-                        //    Target::PrivateRoute(api.import_remote_private_route(conn_outbound_blob)?);
-                        //eprintln!("got outbound connection target {:?}", conn_outbound_target);
-                        eprintln!("import: starting forward for {}", fwd_id);
-                        let remote_stream = AppCallStream::new(fwd_id, routing_context, conn_outbound_target, fwd_receiver);
-                        fwd_handles.insert(fwd_id, tokio::spawn(forward(local_stream, remote_stream)));
-                        eprintln!("import: forward started for {}", fwd_id);
-                    }
-                    Err(e) => {
-                        return Err(AppError::IO(e))
-                    }
-                }
-            }
-            node_res = node_receiver.recv_async() => {
-                match node_res {
-                    Ok(VeilidUpdate::AppCall(app_call)) => {
-                        let reader = match serialize::read_message(
-                            app_call.message(),
-                            ReaderOptions::new(),
-                        ) {
-                            Ok(m) => m,
-                            Err(e) => {
-                                eprintln!("import: malformed message: {:?}", e);
-                                continue
-                            }
-                        };
-                        let call = match reader.get_root::<proto::call::Reader>() {
-                            Ok(c) => c,
-                            Err(e) => {
-                                eprintln!("import: failed to decode message: {:?}", e);
-                                continue
-                            }
-                        };
-                        eprintln!("import: got app_call {:?}", call);
-                        let payload = match call.which() {
-                            Ok(proto::call::Which::Payload(Ok(p))) => p,
-                            Ok(_) => {
-                                eprintln!("import: invalid call: {:?}", call);
-                                continue
-                            }
-                            Err(e) => {
-                                eprintln!("import: invalid call: {:?}", e);
-                                continue
-                            }
-                        };
-
-                        // route message to the right forward
-                        let fwd_id: u64 = call.get_id();
-                        match fwd_senders.get(&fwd_id) {
-                            Some(fwd_sender) => {
-                                if let Err(_) =
-                                    fwd_sender.send(payload.to_vec())
-                                {
-                                    eprintln!("import: forward is gone, removing sender");
-                                    fwd_senders.remove(&fwd_id);
-                                    if let Some(handle) = fwd_handles.remove(&fwd_id) {
-                                        handle.abort();
-                                        let _ = handle.await;
-                                    }
-                                    continue
-                                } else {
-                                    eprintln!("import: sent payload to forwarding stream {}", fwd_id);
-                                }
-                            }
-                            None => {
-                                eprintln!("import: no such forward {}", fwd_id);
-                            }
-                        }
-
-                        match api.app_call_reply(app_call.id(), stream::new_payload_proto(fwd_id, &[])).await {
-                            Ok(_) => {}
-                            Err(e) => {
-                                eprintln!("import: app_call_reply for {} failed: {:?}",fwd_id, e);
-                                eprintln!("import: removing sender for: {}", fwd_id);
-                                fwd_senders.remove(&fwd_id);
-                                if let Some(handle) = fwd_handles.remove(&fwd_id) {
-                                    handle.abort();
-                                    let _ = handle.await;
-                                }
-                                continue
-                            }
-                        };
-                        eprintln!("import: handled app_call for {}", fwd_id);
-                    }
-                    Ok(VeilidUpdate::Shutdown) => {
-                        eprintln!("import: shutdown received");
-                        break;
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("recv failed, {}", e);
-                        break;
-                    }
-                }
-            }
-        };
+            let remote_stream = dialer.dial(remote_dht.clone()).await?;
+            eprintln!(
+                "import: dialed remote stream_id={:?}",
+                remote_stream.stream_id()
+            );
+            tokio::spawn(forward(local_stream, remote_stream));
+            eprintln!("import: started forward");
+        }
     }
-    eprintln!("import loop ended");
-    Ok(())
+    .await;
+    if let Err(e) = dialer.close().await {
+        eprintln!("import: failed to close dialer: {:?}", e);
+    }
+    result
 }
 
 async fn run_export(
@@ -371,25 +229,22 @@ async fn run_export(
         }
     }
     .await;
-    ln.close().await?;
+    if let Err(e) = ln.close().await {
+        eprintln!("import: failed to close listener: {:?}", e);
+    }
     result
 }
 
-async fn get_remote_route(api: VeilidAPI, from_remote: String) -> VeilidAPIResult<Target> {
+async fn open_dht_record(
+    routing_context: &RoutingContext,
+    from_remote: String,
+) -> VeilidAPIResult<DHTRecordDescriptor> {
     backoff::future::retry_notify(
         ExponentialBackoff::default(),
         || async {
-            let routing_context = api.routing_context().with_custom_privacy(privacy())?;
-            let remote_dht = routing_context
+            Ok(routing_context
                 .open_dht_record(CryptoTyped::from_str(from_remote.as_str())?, None)
-                .await?;
-            let remote_entry = routing_context
-                .get_dht_value(remote_dht.key().to_owned(), 0, true)
-                .await?;
-            let remote_blob = remote_entry.unwrap().data().to_vec();
-            Ok(Target::PrivateRoute(
-                api.import_remote_private_route(remote_blob)?,
-            ))
+                .await?)
         },
         |e, dur| {
             eprintln!("get_remote_route failed: {:?} after {:?}", e, dur);
@@ -450,14 +305,6 @@ async fn app_call(
         },
     )
     .await
-}
-
-fn new_connect_proto(call_id: u64, route: &[u8]) -> Vec<u8> {
-    let mut conn_builder = Builder::new_default();
-    let mut conn = conn_builder.init_root::<proto::call::Builder>();
-    conn.set_id(call_id);
-    conn.set_connect(route);
-    return serialize::write_message_to_words(&conn_builder);
 }
 
 fn privacy() -> SafetySelection {
