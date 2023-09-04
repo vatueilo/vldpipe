@@ -7,24 +7,19 @@ mod stream;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use std::{env, io, net, result};
 
-use backoff::{ExponentialBackoff, ExponentialBackoffBuilder};
-use capnp::message::Builder;
-use capnp::serialize;
+use backoff::ExponentialBackoff;
 use clap::Parser;
-use thiserror::Error;
-
 use flume::{unbounded, Receiver, Sender};
-
+use thiserror::Error;
 use tokio::net::{TcpListener, TcpSocket};
-
 use veilid_core::{
-    CryptoKey, RoutingContext, SafetySelection, SafetySpec, Sequencing, VeilidAPIResult, DHTRecordDescriptor,
+    CryptoKey, DHTRecordDescriptor, RoutingContext, SafetySelection, SafetySpec, Sequencing,
+    VeilidAPIResult,
 };
 use veilid_core::{
-    CryptoTyped, DHTSchema, DHTSchemaDFLT, Target, VeilidAPI, VeilidAPIError, VeilidUpdate,
+    CryptoTyped, DHTSchema, DHTSchemaDFLT, VeilidAPI, VeilidAPIError, VeilidUpdate,
     CRYPTO_KIND_VLD0,
 };
 
@@ -177,7 +172,7 @@ async fn run_import(
 
     let remote_dht = open_dht_record(&routing_context, from_remote.to_owned()).await?;
     eprintln!("import: opened dht {:?}", remote_dht);
-    
+
     let result: Result<()> = async {
         loop {
             let (local_stream, local_addr) = local_ln.accept().await?;
@@ -261,13 +256,15 @@ async fn forward(
     eprintln!("{} forward start", stream_id);
     let (mut local_read, mut local_write) = local_stream.split();
     let (mut remote_read, mut remote_write) = tokio::io::split(remote_stream);
-    match tokio::try_join!(
+    let result = match tokio::try_join!(
         async { tokio::io::copy(&mut remote_read, &mut local_write).await },
         async { tokio::io::copy(&mut local_read, &mut remote_write).await },
     ) {
         Ok(_) => Ok(()),
         Err(e) => Err(AppError::IO(io::Error::new(io::ErrorKind::Other, e))),
-    }
+    };
+    eprintln!("forward stream_id={} done: {:?}", stream_id, result);
+    result
 }
 
 async fn new_private_route(api: &VeilidAPI) -> VeilidAPIResult<(CryptoKey, Vec<u8>)> {
@@ -276,32 +273,6 @@ async fn new_private_route(api: &VeilidAPI) -> VeilidAPIResult<(CryptoKey, Vec<u
         || async { Ok(api.new_private_route().await?) },
         |e, dur| {
             eprintln!("new_private_route failed: {:?} after {:?}", e, dur);
-        },
-    )
-    .await
-}
-
-fn app_call_backoff() -> ExponentialBackoff {
-    ExponentialBackoffBuilder::new()
-        .with_initial_interval(Duration::from_millis(500))
-        .with_max_elapsed_time(Some(Duration::from_secs(15)))
-        .build()
-}
-
-async fn app_call(
-    routing_context: &RoutingContext,
-    target: Target,
-    message: Vec<u8>,
-) -> VeilidAPIResult<Vec<u8>> {
-    backoff::future::retry_notify(
-        app_call_backoff(),
-        || async {
-            Ok(routing_context
-                .app_call(target.clone(), message.clone())
-                .await?)
-        },
-        |e, dur| {
-            eprintln!("app_call failed: {:?} after {:?}", e, dur);
         },
     )
     .await
