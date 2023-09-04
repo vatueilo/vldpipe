@@ -4,7 +4,7 @@
 
 
 pub mod call {
-  pub use self::Which::{Route,Payload};
+  pub use self::Which::{Connect,Payload};
 
   #[derive(Copy, Clone)]
   pub struct Owned(());
@@ -71,7 +71,7 @@ pub mod call {
       self.reader.get_data_field::<u64>(0)
     }
     #[inline]
-    pub fn has_route(&self) -> bool {
+    pub fn has_connect(&self) -> bool {
       if self.reader.get_data_field::<u16>(4) != 0 { return false; }
       !self.reader.get_pointer_field(0).is_null()
     }
@@ -84,7 +84,7 @@ pub mod call {
     pub fn which(self) -> ::core::result::Result<WhichReader<'a,>, ::capnp::NotInSchema> {
       match self.reader.get_data_field::<u16>(4) {
         0 => {
-          ::core::result::Result::Ok(Route(
+          ::core::result::Result::Ok(Connect(
             ::capnp::traits::FromPointerReader::get_from_pointer(&self.reader.get_pointer_field(0), ::core::option::Option::None)
           ))
         }
@@ -159,17 +159,17 @@ pub mod call {
       self.builder.set_data_field::<u64>(0, value);
     }
     #[inline]
-    pub fn set_route(&mut self, value: ::capnp::data::Reader<'_>)  {
+    pub fn set_connect(&mut self, value: ::capnp::data::Reader<'_>)  {
       self.builder.set_data_field::<u16>(4, 0);
       self.builder.reborrow().get_pointer_field(0).set_data(value);
     }
     #[inline]
-    pub fn init_route(self, size: u32) -> ::capnp::data::Builder<'a> {
+    pub fn init_connect(self, size: u32) -> ::capnp::data::Builder<'a> {
       self.builder.set_data_field::<u16>(4, 0);
       self.builder.get_pointer_field(0).init_data(size)
     }
     #[inline]
-    pub fn has_route(&self) -> bool {
+    pub fn has_connect(&self) -> bool {
       if self.builder.get_data_field::<u16>(4) != 0 { return false; }
       !self.builder.is_pointer_field_null(0)
     }
@@ -192,7 +192,7 @@ pub mod call {
     pub fn which(self) -> ::core::result::Result<WhichBuilder<'a,>, ::capnp::NotInSchema> {
       match self.builder.get_data_field::<u16>(4) {
         0 => {
-          ::core::result::Result::Ok(Route(
+          ::core::result::Result::Ok(Connect(
             ::capnp::traits::FromPointerBuilder::get_from_pointer(self.builder.get_pointer_field(0), ::core::option::Option::None)
           ))
         }
@@ -244,7 +244,7 @@ pub mod call {
       ::capnp::word(1, 0, 255, 255, 0, 0, 0, 0),
       ::capnp::word(0, 0, 1, 0, 1, 0, 0, 0),
       ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-      ::capnp::word(73, 0, 0, 0, 50, 0, 0, 0),
+      ::capnp::word(73, 0, 0, 0, 66, 0, 0, 0),
       ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
       ::capnp::word(68, 0, 0, 0, 3, 0, 1, 0),
       ::capnp::word(80, 0, 0, 0, 2, 0, 1, 0),
@@ -263,7 +263,7 @@ pub mod call {
       ::capnp::word(9, 0, 0, 0, 0, 0, 0, 0),
       ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
       ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-      ::capnp::word(114, 111, 117, 116, 101, 0, 0, 0),
+      ::capnp::word(99, 111, 110, 110, 101, 99, 116, 0),
       ::capnp::word(13, 0, 0, 0, 0, 0, 0, 0),
       ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
       ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -301,7 +301,7 @@ pub mod call {
     pub const TYPE_ID: u64 = 0x8229_bc0f_69e4_5099;
   }
   pub enum Which<A0,A1> {
-    Route(A0),
+    Connect(A0),
     Payload(A1),
   }
   pub type WhichReader<'a,> = Which<::capnp::Result<::capnp::data::Reader<'a>>,::capnp::Result<::capnp::data::Reader<'a>>>;
