@@ -4,7 +4,9 @@ A most valid pipe.
 
 Publish and consume TCP services over the [Veilid](https://veilid.com) network.
 
-Not working yet.
+# Status
+
+Working, but tends to drop connections and time out. Still improving stability and reliability.
 
 # Put this in your valid pipe and smoke it
 
@@ -45,9 +47,8 @@ Renegotiating private routes. I've observed persistent InvalidTarget failures, w
 
 Authenticated encryption like Tor stealth HS.
 
-No idea how secure this really is yet.
+Security review, this is still experimental.
 
 # Credits
 
 Examples in veilid-core and https://gitlab.com/bbigras/netdog were super-helpful in figuring out how to set things up.
-
