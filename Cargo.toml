@@ -5,6 +5,9 @@ edition = "2021"
 description = "Publish and consume TCP services over the Veilid network."
 build = "build.rs"
 license = "MPL-2.0"
+readme = "README.md"
+repository = "https://gitlab.com/vatueil/vldpipe/"
+authors = ["Cheradenine Zakalwe <vatueilo@proton.me>"]
 
 [dependencies]
 backoff = { version = "0.4.0", features = ["tokio"] }
