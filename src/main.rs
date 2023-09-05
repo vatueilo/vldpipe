@@ -15,8 +15,8 @@ use flume::{unbounded, Receiver, Sender};
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpSocket};
 use veilid_core::{
-    CryptoKey, DHTRecordDescriptor, RoutingContext, SafetySelection, SafetySpec, Sequencing,
-    VeilidAPIResult,
+    CryptoKey, DHTRecordDescriptor, KeyPair, RoutingContext, SafetySelection, SafetySpec,
+    Sequencing, TypedKey, VeilidAPIResult,
 };
 use veilid_core::{
     CryptoTyped, DHTSchema, DHTSchemaDFLT, VeilidAPI, VeilidAPIError, VeilidUpdate,
@@ -178,7 +178,13 @@ async fn run_import(
             let (local_stream, local_addr) = local_ln.accept().await?;
             eprintln!("import: accepted connection from {}", local_addr);
 
-            let remote_stream = dialer.dial(remote_dht.clone()).await?;
+            let remote_stream = match dialer.dial(remote_dht.clone()).await {
+                Ok(rs) => rs,
+                Err(e) => {
+                    eprintln!("import: dial failed: {:?}", e);
+                    continue;
+                }
+            };
             eprintln!(
                 "import: dialed remote stream_id={:?}",
                 remote_stream.stream_id()
@@ -188,8 +194,13 @@ async fn run_import(
         }
     }
     .await;
+
+    // Cleanup
     if let Err(e) = dialer.close().await {
         eprintln!("import: failed to close dialer: {:?}", e);
+    }
+    if let Err(e) = routing_context.close_dht_record(*remote_dht.key()).await {
+        eprintln!("import: failed to close DHT record: {:?}", e);
     }
     result
 }
@@ -199,22 +210,46 @@ async fn run_export(
     node_receiver: Receiver<VeilidUpdate>,
     from_local: SocketAddr,
 ) -> Result<()> {
+    // Create and store, or load DHT key for this local address
+    // TODO: accept a 'name' argument for this
+    let routing_context = api.routing_context().with_custom_privacy(privacy())?;
+    let ln_inbound_dht = match load_dht_key(&api, from_local.to_string().as_str()).await? {
+        Some((key, owner)) => routing_context.open_dht_record(key, Some(owner)).await?,
+        None => {
+            let new_dht = routing_context
+                .create_dht_record(DHTSchema::DFLT(DHTSchemaDFLT { o_cnt: 1 }), None)
+                .await?;
+            store_dht_key(
+                &api,
+                from_local.to_string().as_str(),
+                new_dht.key(),
+                KeyPair::new(
+                    new_dht.owner().to_owned(),
+                    new_dht.owner_secret().unwrap().to_owned(),
+                ),
+            )
+            .await?;
+            new_dht
+        }
+    };
+
     // Veilid "bind()"
     // Create an in-bound route to handle new connections, like a port
-    let (_inbound_key, ln_inbound_blob) = new_private_route(&api).await?;
+    let (inbound_key, ln_inbound_blob) = new_private_route(&api).await?;
+
     // Store its routing blob in DHT
-    let routing_context = api.routing_context().with_custom_privacy(privacy())?;
-    let ln_inbound_dht = routing_context
-        .create_dht_record(DHTSchema::DFLT(DHTSchemaDFLT { o_cnt: 1 }), None)
-        .await?;
     routing_context
         .set_dht_value(ln_inbound_dht.key().to_owned(), 0, ln_inbound_blob.clone())
         .await?;
 
     // Print the DHT key, this is what clients can "connect()" to
-    eprintln!("listening on {}", ln_inbound_dht.key());
-
-    let ln = AppCallListener::bind(routing_context, node_receiver, ln_inbound_dht).await?;
+    eprintln!("bound private route {} to DHT key {}", inbound_key, ln_inbound_dht.key());
+    let ln = AppCallListener::bind(
+        routing_context.to_owned(),
+        node_receiver,
+        ln_inbound_dht.to_owned(),
+    )
+    .await?;
     let result = async {
         loop {
             let remote = ln.accept().await?;
@@ -224,28 +259,19 @@ async fn run_export(
         }
     }
     .await;
-    if let Err(e) = ln.close().await {
-        eprintln!("import: failed to close listener: {:?}", e);
-    }
-    result
-}
 
-async fn open_dht_record(
-    routing_context: &RoutingContext,
-    from_remote: String,
-) -> VeilidAPIResult<DHTRecordDescriptor> {
-    backoff::future::retry_notify(
-        ExponentialBackoff::default(),
-        || async {
-            Ok(routing_context
-                .open_dht_record(CryptoTyped::from_str(from_remote.as_str())?, None)
-                .await?)
-        },
-        |e, dur| {
-            eprintln!("get_remote_route failed: {:?} after {:?}", e, dur);
-        },
-    )
-    .await
+    // Cleanup
+    if let Err(e) = ln.close().await {
+        eprintln!("export: failed to close listener: {:?}", e);
+    }
+    if let Err(e) = routing_context
+        .close_dht_record(*ln_inbound_dht.key())
+        .await
+    {
+        eprintln!("export: failed to close DHT record: {:?}", e);
+    }
+
+    result
 }
 
 async fn forward(
@@ -265,6 +291,45 @@ async fn forward(
     };
     eprintln!("forward stream_id={} done: {:?}", stream_id, result);
     result
+}
+
+async fn load_dht_key(api: &VeilidAPI, name: &str) -> VeilidAPIResult<Option<(TypedKey, KeyPair)>> {
+    let db = api.table_store()?.open("vldpipe", 2).await?;
+    let key = db.load_json::<TypedKey>(0, name.as_bytes()).await?;
+    let owner = db.load_json::<KeyPair>(1, name.as_bytes()).await?;
+    Ok(match (key, owner) {
+        (Some(k), Some(o)) => Some((k, o)),
+        _ => None,
+    })
+}
+
+async fn store_dht_key(
+    api: &VeilidAPI,
+    name: &str,
+    key: &TypedKey,
+    owner: KeyPair,
+) -> VeilidAPIResult<()> {
+    let db = api.table_store()?.open("vldpipe", 2).await?;
+    db.store_json(0, name.as_bytes(), key).await?;
+    db.store_json(1, name.as_bytes(), &owner).await
+}
+
+async fn open_dht_record(
+    routing_context: &RoutingContext,
+    from_remote: String,
+) -> VeilidAPIResult<DHTRecordDescriptor> {
+    backoff::future::retry_notify(
+        ExponentialBackoff::default(),
+        || async {
+            Ok(routing_context
+                .open_dht_record(CryptoTyped::from_str(from_remote.as_str())?, None)
+                .await?)
+        },
+        |e, dur| {
+            eprintln!("get_remote_route failed: {:?} after {:?}", e, dur);
+        },
+    )
+    .await
 }
 
 async fn new_private_route(api: &VeilidAPI) -> VeilidAPIResult<(CryptoKey, Vec<u8>)> {
